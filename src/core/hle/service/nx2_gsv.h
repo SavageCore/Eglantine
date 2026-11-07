@@ -1859,9 +1859,11 @@ private:
         if (!Settings::values.use_speed_limit.GetValue() || Settings::SpeedLimit() == 0) {
             return;
         }
-        // EDEN_MKW_MOVIE_UNPACED=1: no present pacing while a large (>= 1920 wide) movie plays.
-        // The pacing sleep starves Mario Kart World's movie player: its 2560x1440 cup intros ran
-        // at ~70% speed with stuttering sound (~35% with the game's 30 FPS mode).
+        // EDEN_MKW_MOVIE_UNPACED=1: short-floor pacing while a large (>= 1920 wide) movie
+        // plays. The full vblank sleep starves Mario Kart World's movie player: its 2560x1440
+        // cup intros ran at ~70% speed with stuttering sound (~35% with the game's 30 FPS
+        // mode). Skipping the wait entirely played the movie too fast and crashed the game,
+        // so cap presents at ~60 Hz instead and drop the rest of the wait.
         static const bool mkw_movie_unpaced = [] {
             const char* v = std::getenv("EDEN_MKW_MOVIE_UNPACED");
             return v != nullptr && v[0] == '1';
@@ -1871,6 +1873,12 @@ private:
             const auto mkw_now = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             if (mkw_last != 0 && mkw_now - mkw_last < 250'000'000) {
+                static std::atomic<std::int64_t> last_present_ns{0};
+                const std::int64_t prev = last_present_ns.exchange(mkw_now, std::memory_order_relaxed);
+                const std::int64_t floor_ns = 16'666'667;
+                if (prev != 0 && mkw_now - prev < floor_ns) {
+                    std::this_thread::sleep_for(std::chrono::nanoseconds{floor_ns - (mkw_now - prev)});
+                }
                 m_next_vblank = std::chrono::steady_clock::now();
                 return;
             }
